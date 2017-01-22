@@ -1,0 +1,15 @@
+TYPEMAP
+UIContext *   O_X11_MinimalGLViewport_UIContext
+
+OUTPUT
+O_X11_MinimalGLViewport_UIContext
+    sv_setref_pv( $arg, "X11::MinimalGLViewport::UIContext", (void*)$var );
+
+INPUT
+O_X11_MinimalGLViewport_UIContext
+    if (sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG)) {
+        $var = ($type)SvIV((SV*)SvRV( $arg ));
+    }
+    else {
+        croak ( \"${Package}::$func_name() -- $var is not a blessed reference\" );
+    }
