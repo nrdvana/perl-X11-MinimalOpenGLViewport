@@ -7,7 +7,7 @@
 // The .xs includes this file, and provides definitions for the
 //  logging functions, and also perl's "croak".
 // This file can be compiled on its own, separate from the .xs
-//  with these alternate versions of the maxros.
+//  with these alternate versions of the macros.
 #ifndef log_error
  #include <stdio.h>
  #define log_info_enabled()  log_enabled("is_info")
@@ -28,10 +28,16 @@ typedef struct UIContext {
 	Window wnd;
 	GLXContext glctx;
 	int contextReady;
-	SV* error_handler;
 } UIContext;
 
+static int UIContext_X_handler_installed= 0;
 static int UIContext_X_Fatal= 0; // global flag to prevent running more X calls during error handler
+#define CROAK_IF_XLIB_FATAL()   do { if (UIContext_X_Fatal) croak("Cannot call XLib functions after a fatal error"); } while(0)
+#define CROAK_IF_NO_DISPLAY(cx) do { if (!cx->dpy) croak("Not connected to a display"); } while (0)
+#define CROAK_IF_NO_WINDOW(cx)  do { if (!cx->wnd) croak("Window not created yet"); } while (0)
+
+int UIContext_X_IO_error_handler(Display *d);
+int UIContext_X_error_handler(Display *d, XErrorEvent *e);
 
 UIContext *UIContext_new();
 void UIContext_free(UIContext *cx);
@@ -41,9 +47,6 @@ void UIContext_setup_window(UIContext *cx, int win_x, int win_y, int win_w, int 
 void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm);
 void UIContext_get_window_rect(UIContext *cx, int *x, int *y, unsigned int *width, unsigned int *height);
 void UIContext_flip(UIContext *cx);
-void UIContext_set_error_handler(UIContext *cx, SV* coderef);
-static void UIContext_tracked_add(UIContext *cx);
-static void UIContext_tracked_rm(UIContext *cx);
 
 UIContext *UIContext_new() {
 	UIContext *cx= (UIContext*) calloc(1, sizeof(UIContext));
@@ -52,7 +55,6 @@ UIContext *UIContext_new() {
 }
 
 void UIContext_free(UIContext *cx) {
-	UIContext_set_error_handler(cx, NULL);
 	UIContext_disconnect(cx);
 	free(cx);
 	log_trace("XS UIContext freed");
@@ -62,11 +64,16 @@ void UIContext_free(UIContext *cx) {
 // Also, see http://tronche.com/gui/x/xlib/
 void UIContext_connect(UIContext *cx, const char* dispName) {
 	int en_debug= log_debug_enabled();
-	int en_trace= log_trace_enabled();
+	CROAK_IF_XLIB_FATAL();
+	
+	if (!UIContext_X_handler_installed) {
+		XSetIOErrorHandler(&UIContext_X_IO_error_handler);
+		XSetErrorHandler(&UIContext_X_error_handler);
+		UIContext_X_handler_installed= 1;
+	}
+	
 	UIContext_disconnect(cx);
 
-	if (!dispName || !dispName[0]) dispName= getenv("DISPLAY");
-	if (!dispName || !dispName[0]) dispName= ":0";
 	if (en_debug)
 		log_debug("connecting to %s", dispName);
 	
@@ -96,6 +103,8 @@ void UIContext_disconnect(UIContext *cx) {
 void UIContext_setup_window(UIContext *cx, int win_x, int win_y, int win_w, int win_h) {
 	int en_debug= log_debug_enabled();
 	int en_trace= log_trace_enabled();
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
 	
 	if (cx->glctx) glXDestroyContext(cx->dpy, cx->glctx), cx->glctx= 0;
 	if (cx->wnd)   XDestroyWindow(cx->dpy, cx->wnd), cx->wnd= 0;
@@ -103,9 +112,6 @@ void UIContext_setup_window(UIContext *cx, int win_x, int win_y, int win_w, int 
 	if (cx->xvisi) XFree(cx->xvisi), cx->xvisi= NULL;
 	cx->contextReady= 0;
 
-	if (!cx->dpy)
-		UIContext_connect(cx, NULL);
-	
 	if (en_debug)
 		log_debug("Testing for glX support");
 	errno= 0;
@@ -198,15 +204,17 @@ void UIContext_get_window_rect(
 	UIContext *cx,
 	int *x, int *y,	unsigned int *width, unsigned int *height
 ) {
-	if (!cx->dpy) croak("Not connected to a display");
-	if (!cx->wnd) croak("Window not created yet");
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+	CROAK_IF_NO_WINDOW(cx);
 	Window root;
 	unsigned int border= 0, depth= 0;
 		XGetGeometry(cx->dpy, cx->wnd, &root, x, y, width, height, &border, &depth);
 }
 
 void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm) {
-	if (!cx->dpy) croak("Not connected to a display");
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
 	
 	errno= 0;
 	Screen *s= DefaultScreenOfDisplay(cx->dpy);
@@ -220,79 +228,85 @@ void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int 
 }
 
 void UIContext_flip(UIContext *cx) {
-	if (cx->contextReady) {
-		glXSwapBuffers(cx->dpy, cx->wnd);
-		glFlush();
-	}
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+	if (!cx->contextReady)
+		croak("GL Context is not initialized");
+	
+	glXSwapBuffers(cx->dpy, cx->wnd);
+	glFlush();
+}
+
+void UIContext_get_error_codes(HV* dest) {
+	#define E(x) hv_stores(dest, #x, newSViv(x));
+	E(BadAccess)
+	E(BadAlloc)
+	E(BadAtom)
+	E(BadColor)
+	E(BadCursor)
+	E(BadDrawable)
+	E(BadFont)
+	E(BadGC)
+	E(BadIDChoice)
+	E(BadImplementation)
+	E(BadLength)
+	E(BadMatch)
+	E(BadName)
+	E(BadPixmap)
+	E(BadRequest)
+	E(BadValue)
+	E(BadWindow)
+	#undef E
+}
+
+int UIContext_X_error_handler(Display *d, XErrorEvent *e) {
+	log_debug("XLib non-fatal error handler triggered");
+	dSP;
+	ENTER;
+	SAVETMPS;
+	PUSHMARK(SP);
+	EXTEND(SP, 1);
+	
+	// Convert the XErrorEvent to a hashref
+	HV* err= newHV();
+	hv_stores(err, "type",         newSViv((int) e->type));
+	hv_stores(err, "display",      newSVpvf("%p", (void*) e->display));
+	hv_stores(err, "serial",       newSViv((int) e->serial));
+	hv_stores(err, "error_code",   newSViv((int) e->error_code));
+	hv_stores(err, "request_code", newSViv((int) e->request_code));
+	hv_stores(err, "minor_code",   newSViv((int) e->minor_code));
+	hv_stores(err, "resourceid",   newSViv((int) e->resourceid));
+	
+	PUSHs(sv_2mortal(newRV_noinc((SV*)err)));
+	PUTBACK;
+	call_pv("X11::MinimalOpenGLViewport::_X11_error", G_VOID|G_DISCARD|G_EVAL|G_KEEPERR);
+	FREETMPS;
+	LEAVE;
+	return 0;
 }
 
 /*
-What a mess.   So my OCD insisted that I add a handler for
-XLib errors so that the perl program has a chance to exit
-gracefully.  However XLib is designed stupidly and gives
-you exactly one callback and forcibly terminates the program
-if te callback returns, regardless of what you do to recover.
 
-I wanted the callbacks to be something you set on the UIContext
-object rather than global, so I was forced to do this elaborate
-tracking of UIContext objects.  Note that the destructor for
-UIContext un-sets the handler thus removing it from this list
-before it is destroyed.
+What a mess.   So XLib has a stupid design where they forcibly abort the
+program when an I/O error occurs and the X server is lost.  Even if you
+install the error handler, they expect you to abort the program and they
+do it for you if you return.  Furthermore, they tell you that you may not
+call any more XLib functions at all.
 
-This is not thread safe, but generally perl isn't either.
+Luckily we can cheat with croak (longjmp) back out of the callback and
+avoid the forcible program exit.  However now we can't officially use XLib
+again for the duration of the program, and there could be lost resources
+from our longjmp.  So, set a global flag to prevent any re-entry into an
+XLib function.
+
 */
-
-static UIContext **UIContext_tracked= NULL;
-static int UIContext_count= 0;
-
 int UIContext_X_IO_error_handler(Display *d) {
 	int i;
-	log_error("Encountered fatal X I/O error.  XLib forces us to exit.");
-	UIContext_X_Fatal= 1;
-	for (i= 0; i < UIContext_count; i++) {
-		dSP;
-		PUSHMARK(SP);
-		call_sv(UIContext_tracked[i]->error_handler, G_DISCARD|G_NOARGS);
-	}
+	UIContext_X_Fatal= 1; // prevent UIContexts from calling back into XLib
+	log_debug("XLib fatal error handler triggered");
+	dSP;
+	PUSHMARK(SP);
+	call_pv("X11::MinimalOpenGLViewport::_X11_error_fatal", G_VOID|G_DISCARD|G_NOARGS|G_EVAL|G_KEEPERR);
+	croak("Fatal X11 I/O Error"); // longjmp past XLib
 	return 0;
 }
-static void UIContext_tracked_add(UIContext *cx) {
-	UIContext **larger= realloc((void*)UIContext_tracked,
-		(UIContext_count+1) * sizeof(UIContext*));
-	if (!larger)
-		croak("realloc failed for setting up error handler");
-	// If array was NULL, then this is the first time it was
-	//  used and we should set the XLib handler
-	if (!UIContext_count) {
-		log_debug("Setting X IO error handler");
-		XSetIOErrorHandler(&UIContext_X_IO_error_handler);
-	}
-	UIContext_tracked= larger;
-	UIContext_tracked[UIContext_count++]= cx;
-}
-static void UIContext_tracked_rm(UIContext *cx) {
-	int i;
-	for (i= 0; i < UIContext_count; i++) {
-		if (UIContext_tracked[i] == cx) {
-			UIContext_tracked[i]= UIContext_tracked[UIContext_count-1];
-			UIContext_count--;
-			break;
-		}
-	}
-}
-
-void UIContext_set_error_handler(UIContext *cx, SV* coderef) {
-	if (coderef && !cx->error_handler)
-		UIContext_tracked_add(cx);
-	else if (cx->error_handler && !coderef)
-		UIContext_tracked_rm(cx);
-	
-	if (cx->error_handler)
-		sv_2mortal(cx->error_handler);
-	
-	cx->error_handler= coderef;
-	
-	if (cx->error_handler)
-		SvREFCNT_inc(cx->error_handler);
-}
-

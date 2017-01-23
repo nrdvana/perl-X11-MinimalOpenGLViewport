@@ -8,7 +8,7 @@
 // It is not a separate library like most people do, just
 // a separate file for readability and syntax hilighting.
 
-#define LOG_PKG "X11::MinimalGLViewport"
+#define LOG_PKG "X11::MinimalOpenGLViewport"
 
 #define log_info_enabled()  log_enabled("is_info")
 #define log_debug_enabled() log_enabled("is_debug")
@@ -62,14 +62,14 @@ static void log_write(const char *method, SV *message) {
 
 #include "uicontext.c"
 
-MODULE = X11::MinimalGLViewport		PACKAGE = X11::MinimalGLViewport::UIContext
+MODULE = X11::MinimalOpenGLViewport		PACKAGE = X11::MinimalOpenGLViewport::UIContext
 
 SV *
 new(pkg)
 	const char* pkg
 	CODE:
-		if (!sv_derived_from(ST(0), "X11::MinimalGLViewport::UIContext"))
-			Perl_croak("Expected package name deriving from X11::MinimalGLViewport::UIContext");
+		if (!sv_derived_from(ST(0), "X11::MinimalOpenGLViewport::UIContext"))
+			Perl_croak("Expected package name deriving from X11::MinimalOpenGLViewport::UIContext");
 		UIContext *cx = UIContext_new();
 		RETVAL = sv_setref_pv(newSV(0), pkg, (void*) cx);
 	OUTPUT:
@@ -82,14 +82,16 @@ DESTROY(cx)
 		UIContext_free(cx);
 
 void
-screen_wh(cx)
+screen_metrics(cx)
 	UIContext *cx;
 	INIT:
-		int w, h;
+		int w, h, w_mm, h_mm;
 	PPCODE:
-		UIContext_get_screen_metrics(cx, &w, &h, NULL, NULL);
+		UIContext_get_screen_metrics(cx, &w, &h, &w_mm, &h_mm);
 		XPUSHs(sv_2mortal(newSViv(w)));
 		XPUSHs(sv_2mortal(newSViv(h)));
+		XPUSHs(sv_2mortal(newSViv(w_mm)));
+		XPUSHs(sv_2mortal(newSViv(h_mm)));
 
 void
 window_rect(cx)
@@ -129,15 +131,18 @@ setup_window(cx, x, y, w, h)
 
 void
 flip(cx)
-	UIContext *cx
+	UIContext * cx
 	CODE:
 		UIContext_flip(cx);
 
-void
-set_error_handler(cx, coderef)
+SV*
+display(cx)
 	UIContext * cx
-	SV * coderef
 	PPCODE:
-		if (SvOK(coderef) && SvTYPE(SvRV(coderef)) != SVt_PVCV)
-			croak("Require coderef or undef");
-		UIContext_set_error_handler(cx, SvOK(coderef)? SvRV(coderef) : NULL);
+		XPUSHs(sv_2mortal(newSVpvf("%p", cx->dpy)));
+
+void
+get_error_codes(dest)
+	HV * dest
+	CODE:
+		UIContext_get_error_codes(dest);
