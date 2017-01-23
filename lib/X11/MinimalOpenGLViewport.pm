@@ -6,7 +6,7 @@ use Scalar::Util 'weaken';
 use Carp;
 require OpenGL;
 
-our $VERSION= 0.00_00;
+our $VERSION= '0.00_00';
 
 require XSLoader;
 XSLoader::load('X11::MinimalOpenGLViewport', $VERSION);
