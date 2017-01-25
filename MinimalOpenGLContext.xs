@@ -66,7 +66,7 @@ MODULE = X11::MinimalOpenGLContext		PACKAGE = X11::MinimalOpenGLContext::UIConte
 
 SV *
 new(pkg)
-	const char* pkg
+	const char * pkg
 	CODE:
 		if (!sv_derived_from(ST(0), "X11::MinimalOpenGLContext::UIContext"))
 			Perl_croak("Expected package name deriving from X11::MinimalOpenGLContext::UIContext");
@@ -77,13 +77,13 @@ new(pkg)
 
 void
 DESTROY(cx)
-	UIContext *cx
+	UIContext * cx
 	CODE:
 		UIContext_free(cx);
 
 void
 screen_metrics(cx)
-	UIContext *cx;
+	UIContext * cx;
 	INIT:
 		int w, h, w_mm, h_mm;
 	PPCODE:
@@ -109,15 +109,23 @@ window_rect(cx)
 void
 connect(cx, display)
 	UIContext * cx
-	const char *display 
+	const char * display 
 	CODE:
 		UIContext_connect(cx, display);
 
 void
 disconnect(cx)
-	UIContext *cx
+	UIContext * cx
 	CODE:
 		UIContext_disconnect(cx);
+
+void
+setup_glcontext(cx, link_to, direct)
+	UIContext * cx
+	int link_to
+	int direct
+	CODE:
+		UIContext_setup_glcontext(cx, link_to, direct);
 
 void
 setup_window(cx, x, y, w, h)
@@ -141,8 +149,39 @@ display(cx)
 	PPCODE:
 		XPUSHs(sv_2mortal(newSVpvf("%p", cx->dpy)));
 
+SV*
+glctx_id(cx)
+	UIContext * cx
+	PPCODE:
+		XPUSHs(sv_2mortal(newSViv(cx->glctx_id)));
+
+SV*
+has_glcontext(cx)
+	UIContext * cx
+	PPCODE:
+		XPUSHs(sv_2mortal(newSViv(cx->glctx? 1 : 0)));
+
+SV*
+window_id(cx)
+	UIContext * cx
+	PPCODE:
+		XPUSHs(sv_2mortal(newSViv(cx->wnd)));
+
 void
-get_error_codes(dest)
+glx_version(cx)
+	UIContext * cx
+	PPCODE:
+		XPUSHs(sv_2mortal(newSViv(cx->glx_version_major)));
+		XPUSHs(sv_2mortal(newSViv(cx->glx_version_minor)));
+
+SV*
+glx_extensions(cx)
+	UIContext * cx
+	PPCODE:
+		XPUSHs(sv_2mortal(newSVpv(cx->glx_extensions? cx->glx_extensions : "", 0)));
+
+void
+get_xlib_error_codes(dest)
 	HV * dest
 	CODE:
-		UIContext_get_error_codes(dest);
+		UIContext_get_xlib_error_codes(dest);

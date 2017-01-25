@@ -40,7 +40,7 @@ ok( !$handler_ran, 'handler not run' );
 ok( !$callback_ran, 'callback not run' );
 
 # Now trigger the error
-like( errmsg{ $v->setup_window; }, qr/fatal/i, 'X11 call throws error' );
+like( errmsg{ $v->setup_glcontext; }, qr/fatal/i, 'X11 call throws error' );
 
 ok( $handler_ran, 'handler ran' );
 ok( $callback_ran, 'callback ran' );

@@ -169,6 +169,48 @@ sub DESTROY {
 
 sub _rect { X11::MinimalOpenGLContext::Rect->new(@_) }
 
+=head2 setup_glcontext
+
+  $v->setup_context($direct, $shared_X_id);
+
+Create the OpenGL context.  This is done before creating the window, but you
+can't run OpenGL rendering commands until after the window is selected as the
+output target.
+
+If C<$direct> is true, it attempts to create the OpenGL context in the current
+process, connected directly to the DRI device in /dev.  If false, it creates
+the context within the X server and performs all OpenGL calls through the X11
+protocol.  While direct mode is often faster, indirect mode allows you to share
+the OpenGL context with other processes.  Beware that as of 2016 many linux
+distributions have disabled XOrg indirect rendering, and it must be enabled
+with the "+iglx" command line option.
+
+If C<$shared_X_id> is nonzero, this method will import an existing shared
+OpenGL context from the X server.  This requires the X11 extension
+C<GLX_EXT_import_context>, but should be found in all modern Linux distros.
+
+=cut
+
+sub setup_glcontext {
+	my ($self, $direct, $shared_cx_id)= @_;
+	$self->_ui_context->setup_glcontext($shared_cx_id||0, defined $direct? $direct : 1);
+	$log->debug("gl context is ".$self->glcontext_id);
+}
+
+=head2 glcontext_id
+
+Returns the X11 ID of the OpenGL context, or 0 if the context has not been
+created yet or if the X server doesn't support the C<GLX_EXT_import_context>
+extension.
+
+This is primarily useful for passing to another process to share a context.
+
+=cut
+
+sub glcontext_id {
+	return shift->_ui_context->glctx_id;
+}
+
 =head2 setup_window
 
   $v->setup_window(); # defaults to $ENV{GEOMETRY}, else size of screen
@@ -176,7 +218,8 @@ sub _rect { X11::MinimalOpenGLContext::Rect->new(@_) }
 
 Create an X11 window and initialize an OpenGL context on it.
 
-Automatically calls L</connect> if not connected to a display yet.
+Automatically calls L</connect> if not connected to a display yet, and
+setup_glcontext(1) if the GL context isn't set up yet.
 If L</setup_window> has already been called this will destroy the current
 window and then create a new one.
 
@@ -185,6 +228,7 @@ window and then create a new one.
 sub setup_window {
 	my ($self, $rect)= @_;
 	$self->connect unless $self->is_connected;
+	$self->setup_glcontext(1) unless $self->_ui_context->has_glcontext;
 	
 	my ($x, $y, $w, $h);
 	if (defined $rect) {
@@ -380,7 +424,7 @@ our %_X11_error_code_byname;
 our %_X11_error_code_byval;
 sub _X11_error_code_byval {
 	if (!keys %_X11_error_code_byname) {
-		X11::MinimalOpenGLContext::UIContext::get_error_codes(\%_X11_error_code_byname);
+		X11::MinimalOpenGLContext::UIContext::get_xlib_error_codes(\%_X11_error_code_byname);
 		%_X11_error_code_byval= reverse %_X11_error_code_byname;
 	}
 	return \%_X11_error_code_byval;
@@ -391,6 +435,7 @@ sub _X11_error_code_byval {
 sub _X11_error {
 	my ($err)= @_;
 	$err->{error_code_name}= _X11_error_code_byval()->{$err->{error_code}} || '(unknown)';
+	use DDP; p $err; p (my $x= \%_ConnectedInstances);
 	# iterate through all connections to see which one the error applies to.
 	for (values %_ConnectedInstances) {
 		if ($_->_has_ui_context && $_->_ui_context->display eq $err->{display}) {
