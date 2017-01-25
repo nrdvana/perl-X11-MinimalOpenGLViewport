@@ -1,5 +1,5 @@
 # Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLViewport.t'
+# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLContext.t'
 
 #########################
 
@@ -8,10 +8,10 @@ use IO::Handle;
 use Log::Any::Adapter 'TAP';
 sub errmsg(&) {	eval { shift->() };	defined $@? $@ : ''; }
 
-use_ok('X11::MinimalOpenGLViewport') or BAIL_OUT;
+use_ok('X11::MinimalOpenGLContext') or BAIL_OUT;
 
-my $v= new_ok( 'X11::MinimalOpenGLViewport', [], 'new viewport' );
-isa_ok( $v->_ui_context, 'X11::MinimalOpenGLViewport::UIContext', 'has ui context' );
+my $v= new_ok( 'X11::MinimalOpenGLContext', [], 'new viewport' );
+isa_ok( $v->_ui_context, 'X11::MinimalOpenGLContext::UIContext', 'has ui context' );
 
 like(errmsg{ $v->_ui_context->screen_metrics }, qr/connect/i, 'screen dims unavailable before connect' );
 $v->_ui_context->connect(undef);

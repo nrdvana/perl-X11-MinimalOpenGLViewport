@@ -1,12 +1,12 @@
 TYPEMAP
-UIContext *   O_X11_MinimalOpenGLViewport_UIContext
+UIContext *   O_X11_MinimalOpenGLContext_UIContext
 
 OUTPUT
-O_X11_MinimalOpenGLViewport_UIContext
-    sv_setref_pv( $arg, "X11::MinimalOpenGLViewport::UIContext", (void*)$var );
+O_X11_MinimalOpenGLContext_UIContext
+    sv_setref_pv( $arg, "X11::MinimalOpenGLContext::UIContext", (void*)$var );
 
 INPUT
-O_X11_MinimalOpenGLViewport_UIContext
+O_X11_MinimalOpenGLContext_UIContext
     if (sv_isobject($arg) && (SvTYPE(SvRV($arg)) == SVt_PVMG)) {
         $var = ($type)SvIV((SV*)SvRV( $arg ));
     }

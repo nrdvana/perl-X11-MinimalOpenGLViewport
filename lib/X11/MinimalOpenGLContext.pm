@@ -1,4 +1,4 @@
-package X11::MinimalOpenGLViewport;
+package X11::MinimalOpenGLContext;
 use Moo 2;
 use Log::Any '$log';
 use Try::Tiny;
@@ -9,7 +9,7 @@ require OpenGL;
 our $VERSION= '0.00_00';
 
 require XSLoader;
-XSLoader::load('X11::MinimalOpenGLViewport', $VERSION);
+XSLoader::load('X11::MinimalOpenGLContext', $VERSION);
 
 our %_ConnectedInstances;
 
@@ -18,9 +18,9 @@ our %_ConnectedInstances;
 =head1 SYNOPSIS
 
   use OpenGL;
-  use X11::MinimalOpenGLViewport;
+  use X11::MinimalOpenGLContext;
   
-  my $v= X11::MinimalOpenGLViewport->new();
+  my $v= X11::MinimalOpenGLContext->new();
   $v->connect;         # connect to X11 server
   $v->setup_window;    # create X11 window, default to size of the screen
   $v->project_frustum; # convenience for setting up standard GL_PROJECTION matrix
@@ -100,7 +100,7 @@ Called any time you disconnect from the X server for any reason.
 =cut
 
 has _ui_context      => ( is => 'lazy', predicate => 1 );
-sub _build__ui_context { X11::MinimalOpenGLViewport::UIContext->new; }
+sub _build__ui_context { X11::MinimalOpenGLContext::UIContext->new; }
 
 # Used by project_frustum
 has mirror_x       => ( is => 'rw' );
@@ -167,7 +167,7 @@ sub DESTROY {
 	$self->disconnect if $_ConnectedInstances{$self};
 }
 
-sub _rect { X11::MinimalOpenGLViewport::Rect->new(@_) }
+sub _rect { X11::MinimalOpenGLContext::Rect->new(@_) }
 
 =head2 setup_window
 
@@ -380,7 +380,7 @@ our %_X11_error_code_byname;
 our %_X11_error_code_byval;
 sub _X11_error_code_byval {
 	if (!keys %_X11_error_code_byname) {
-		X11::MinimalOpenGLViewport::UIContext::get_error_codes(\%_X11_error_code_byname);
+		X11::MinimalOpenGLContext::UIContext::get_error_codes(\%_X11_error_code_byname);
 		%_X11_error_code_byval= reverse %_X11_error_code_byname;
 	}
 	return \%_X11_error_code_byval;
@@ -414,7 +414,7 @@ sub _X11_error_fatal {
 	}
 }
 
-package X11::MinimalOpenGLViewport::Rect;
+package X11::MinimalOpenGLContext::Rect;
 use strict;
 use warnings;
 use Carp;

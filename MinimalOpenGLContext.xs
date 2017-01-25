@@ -8,7 +8,7 @@
 // It is not a separate library like most people do, just
 // a separate file for readability and syntax hilighting.
 
-#define LOG_PKG "X11::MinimalOpenGLViewport"
+#define LOG_PKG "X11::MinimalOpenGLContext"
 
 #define log_info_enabled()  log_enabled("is_info")
 #define log_debug_enabled() log_enabled("is_debug")
@@ -62,14 +62,14 @@ static void log_write(const char *method, SV *message) {
 
 #include "uicontext.c"
 
-MODULE = X11::MinimalOpenGLViewport		PACKAGE = X11::MinimalOpenGLViewport::UIContext
+MODULE = X11::MinimalOpenGLContext		PACKAGE = X11::MinimalOpenGLContext::UIContext
 
 SV *
 new(pkg)
 	const char* pkg
 	CODE:
-		if (!sv_derived_from(ST(0), "X11::MinimalOpenGLViewport::UIContext"))
-			Perl_croak("Expected package name deriving from X11::MinimalOpenGLViewport::UIContext");
+		if (!sv_derived_from(ST(0), "X11::MinimalOpenGLContext::UIContext"))
+			Perl_croak("Expected package name deriving from X11::MinimalOpenGLContext::UIContext");
 		UIContext *cx = UIContext_new();
 		RETVAL = sv_setref_pv(newSV(0), pkg, (void*) cx);
 	OUTPUT:

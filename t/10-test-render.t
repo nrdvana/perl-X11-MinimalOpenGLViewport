@@ -1,5 +1,5 @@
 # Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLViewport.t'
+# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLContext.t'
 
 #########################
 
@@ -9,9 +9,9 @@ use OpenGL qw(:glfunctions :glconstants);
 use Log::Any::Adapter 'TAP';
 sub errmsg(&) {	eval { shift->() };	defined $@? $@ : ''; }
 
-use_ok('X11::MinimalOpenGLViewport') or BAIL_OUT;
+use_ok('X11::MinimalOpenGLContext') or BAIL_OUT;
 
-my $v= new_ok( 'X11::MinimalOpenGLViewport', [on_error => sub { use DDP; p $_[1]; }], 'new viewport' );
+my $v= new_ok( 'X11::MinimalOpenGLContext', [on_error => sub { use DDP; p $_[1]; }], 'new viewport' );
 
 is( errmsg{ $v->setup_window([0, 0, 500, 500]); }, '', 'create window' );
 is( errmsg{ $v->project_frustum(); },            '', 'setup frustum' );

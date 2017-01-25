@@ -279,7 +279,7 @@ int UIContext_X_error_handler(Display *d, XErrorEvent *e) {
 	
 	PUSHs(sv_2mortal(newRV_noinc((SV*)err)));
 	PUTBACK;
-	call_pv("X11::MinimalOpenGLViewport::_X11_error", G_VOID|G_DISCARD|G_EVAL|G_KEEPERR);
+	call_pv("X11::MinimalOpenGLContext::_X11_error", G_VOID|G_DISCARD|G_EVAL|G_KEEPERR);
 	FREETMPS;
 	LEAVE;
 	return 0;
@@ -306,7 +306,7 @@ int UIContext_X_IO_error_handler(Display *d) {
 	log_debug("XLib fatal error handler triggered");
 	dSP;
 	PUSHMARK(SP);
-	call_pv("X11::MinimalOpenGLViewport::_X11_error_fatal", G_VOID|G_DISCARD|G_NOARGS|G_EVAL|G_KEEPERR);
+	call_pv("X11::MinimalOpenGLContext::_X11_error_fatal", G_VOID|G_DISCARD|G_NOARGS|G_EVAL|G_KEEPERR);
 	croak("Fatal X11 I/O Error"); // longjmp past XLib
 	return 0;
 }

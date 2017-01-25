@@ -1,5 +1,5 @@
 # Before `make install' is performed this script should be runnable with
-# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLViewport.t'
+# `make test'. After `make install' it should work as `perl X11-MinimalOpenGLContext.t'
 
 #########################
 
@@ -8,16 +8,16 @@ use IO::Handle;
 use Log::Any::Adapter 'TAP';
 sub errmsg(&) {	eval { shift->() };	defined $@? $@ : ''; }
 
-use_ok('X11::MinimalOpenGLViewport') or BAIL_OUT;
+use_ok('X11::MinimalOpenGLContext') or BAIL_OUT;
 
-my $v= new_ok( 'X11::MinimalOpenGLViewport', [], 'new viewport' );
+my $v= new_ok( 'X11::MinimalOpenGLContext', [], 'new viewport' );
 
 my $handler_ran= 0;
 my $callback_ran= 0;
 
-my $prev= \&X11::MinimalOpenGLViewport::_X11_error_fatal;
+my $prev= \&X11::MinimalOpenGLContext::_X11_error_fatal;
 defined $prev or die "wtf";
-*X11::MinimalOpenGLViewport::_X11_error_fatal= sub {
+*X11::MinimalOpenGLContext::_X11_error_fatal= sub {
 	note("Fatal error handler ran");
 	$handler_ran= 1;
 	$prev->();
