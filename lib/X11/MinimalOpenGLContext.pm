@@ -21,14 +21,19 @@ our %_ConnectedInstances;
   use X11::MinimalOpenGLContext;
   
   my $v= X11::MinimalOpenGLContext->new();
-  $v->connect;         # connect to X11 server
-  $v->setup_window;    # create X11 window, default to size of the screen
+  $v->setup_window;    # Connect to X11, create GL context, and create X11 window
   $v->project_frustum; # convenience for setting up standard GL_PROJECTION matrix
   
   while (1) {
     ...; # Perform your OpenGL rendering
     $v->show();   # calls glXSwapBuffers, and logs glGetError()
   }
+  
+  # Or be more specific about the setup process:
+  $v= X11::MinimalOpenGLContext->new();
+  $v->connect("foo:1.0");       // connect to a remote display
+  $v->setup_glcontext(0, 1234); // connect to a shared indirect rendering context
+  $v->setup_window();
 
 =head1 DESCRIPTION
 
@@ -46,6 +51,19 @@ objects, or it could be rewritten to use XCB instead of XLib, but I probably
 won't do that any time soon unless someone wants to assist.
 
 =head1 ATTRIBUTES
+
+=head2 display
+
+Default value for L</connect>.  Otherwise connect defaults to C<$ENV{DISPLAY}>.
+
+=head2 direct_render
+
+Default value for first argument of L</setup_glcontext>.  Direct rendering
+defaults to true of not overridden by this or the argument to setup_glcontext.
+
+=head2 shared_context_id
+
+Default value for second argument of L</setup_glcontext>.
 
 =head2 mirror_x
 
@@ -76,22 +94,22 @@ Default value for the depth of C<glFrustum>, when L</project_frustum> is called.
 =head2 on_error
 
   $v->on_error(sub {
-    my ($viewport, $x_error_info, $is_fatal)= @_;
+    my ($min_gl_context_obj, $x_error_info, $is_fatal)= @_;
     ...
   });
 
-X11 reports errors asynchronously, which can make it hard to associate
-an error to its source.  This callback lets you know that an error was
-associated with this particular connection, and gives you the XErrorInfo
-to help track things down.
+X11 reports errors asynchronously, which can make it hard to associate an
+error to its source.  This callback lets you know that an error was
+associated with this particular connection, and gives you the XErrorInfo to
+help track things down.
 
-If the error was fatal, then C<$is_fatal> is true, C<$x_error_info> will
-be C<undef>, and you won't be able to make any more XLib calls for the
-remaindr of your program!  In this case you should clean up and exit.
+If the error was fatal, then C<$is_fatal> is true, C<$x_error_info> will be
+C<undef>, and you won't be able to make any more XLib calls for the remaindr
+of your program!  In this case you should clean up and exit.
 
-Fatal errors affect all Viewports (and in fact, all other users of XLib,
-but this module has no control over that) so all viewports will get
-their C<on_error> called, followed by their C<on_disconnect> handler.
+Fatal errors affect all MinimalOpenGLContext objects (and in fact, all other
+users of XLib! but this module has no control over that) so all viewports
+will get their C<on_error> called, followed by their C<on_disconnect> handler.
 
 =head2 on_disconnect
 
@@ -99,8 +117,16 @@ Called any time you disconnect from the X server for any reason.
 
 =cut
 
+# This is our interface to XS
 has _ui_context      => ( is => 'lazy', predicate => 1 );
 sub _build__ui_context { X11::MinimalOpenGLContext::UIContext->new; }
+
+# used by connect
+has display        => ( is => 'rw' );
+
+# used by setup_glcontext
+has direct_render     => ( is => 'rw' );
+has shared_context_id => ( is => 'rw' );
 
 # Used by project_frustum
 has mirror_x       => ( is => 'rw' );
@@ -109,6 +135,7 @@ has viewport_rect  => ( is => 'rw' );
 has frustum_rect   => ( is => 'rw' );
 has frustum_depth  => ( is => 'rw', default => sub { 2500; } );
 
+# callbacks
 has on_error       => ( is => 'rw' );
 has on_disconnect  => ( is => 'rw' );
 
@@ -193,7 +220,10 @@ C<GLX_EXT_import_context>, but should be found in all modern Linux distros.
 
 sub setup_glcontext {
 	my ($self, $direct, $shared_cx_id)= @_;
-	$self->_ui_context->setup_glcontext($shared_cx_id||0, defined $direct? $direct : 1);
+	$direct= $self->direct_render unless defined $direct;
+	$direct= 1 unless defined $direct;
+	$shared_cx_id= $self->shared_context_id unless defined $shared_cx_id;
+	$self->_ui_context->setup_glcontext($shared_cx_id||0, $direct);
 	$log->debug("gl context is ".$self->glcontext_id);
 }
 
@@ -422,11 +452,14 @@ sub get_gl_errors {
 
 our %_X11_error_code_byname;
 our %_X11_error_code_byval;
+sub _X11_error_code_byname {
+	X11::MinimalOpenGLContext::UIContext::get_xlib_error_codes(\%_X11_error_code_byname)
+		unless keys %_X11_error_code_byname;
+	return \%_X11_error_code_byname;
+}
 sub _X11_error_code_byval {
-	if (!keys %_X11_error_code_byname) {
-		X11::MinimalOpenGLContext::UIContext::get_xlib_error_codes(\%_X11_error_code_byname);
-		%_X11_error_code_byval= reverse %_X11_error_code_byname;
-	}
+	%_X11_error_code_byval= reverse %{ _X11_error_code_byname() }
+		unless keys %_X11_error_code_byval;
 	return \%_X11_error_code_byval;
 }
 
@@ -435,7 +468,7 @@ sub _X11_error_code_byval {
 sub _X11_error {
 	my ($err)= @_;
 	$err->{error_code_name}= _X11_error_code_byval()->{$err->{error_code}} || '(unknown)';
-	use DDP; p $err; p (my $x= \%_ConnectedInstances);
+
 	# iterate through all connections to see which one the error applies to.
 	for (values %_ConnectedInstances) {
 		if ($_->_has_ui_context && $_->_ui_context->display eq $err->{display}) {
