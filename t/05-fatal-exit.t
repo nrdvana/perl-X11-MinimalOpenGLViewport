@@ -28,6 +28,7 @@ $v->on_disconnect(sub {
 });
 
 is( errmsg{ $v->connect; }, '', 'connected' );
+is( errmsg{ $v->setup_glcontext; }, '', 'initialized' );
 
 # shutdown every socket, ensuring we lose the X server
 note("Interrupting X11 connection to simulate lost server");
@@ -40,7 +41,7 @@ ok( !$handler_ran, 'handler not run' );
 ok( !$callback_ran, 'callback not run' );
 
 # Now trigger the error
-like( errmsg{ $v->setup_glcontext; }, qr/fatal/i, 'X11 call throws error' );
+like( errmsg{ $v->setup_window; }, qr/fatal/i, 'X activity triggers fatal error' );
 
 ok( $handler_ran, 'handler ran' );
 ok( $callback_ran, 'callback ran' );

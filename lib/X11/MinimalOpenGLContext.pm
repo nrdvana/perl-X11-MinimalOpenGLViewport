@@ -118,11 +118,11 @@ Called any time you disconnect from the X server for any reason.
 =cut
 
 # This is our interface to XS
-has _ui_context      => ( is => 'lazy', predicate => 1 );
-sub _build__ui_context { X11::MinimalOpenGLContext::UIContext->new; }
+has _ui_context       => ( is => 'lazy', predicate => 1 );
+sub _build__ui_context   { X11::MinimalOpenGLContext::UIContext->new; }
 
 # used by connect
-has display        => ( is => 'rw' );
+has display           => ( is => 'rw' );
 
 # used by setup_glcontext
 has direct_render     => ( is => 'rw' );
@@ -492,8 +492,8 @@ sub _X11_error {
 sub _X11_error_fatal {
 	$log->error("Fatal X11 error.");
 	my @close= values %_ConnectedInstances;
-	for my $v (@close) {
-		try { $glc->on_error->($v, undef, 1) } catch { warn $_; }
+	for my $glc (@close) {
+		try { $glc->on_error->($glc, undef, 1) } catch { warn $_; }
 			if $glc->on_error;
 		try { $glc->disconnect; } catch { warn $_; };
 	}

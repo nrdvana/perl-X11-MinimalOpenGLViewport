@@ -21,7 +21,7 @@ like(errmsg{ $v->_ui_context->screen_metrics }, qr/connect/i, 'screen dims unava
 $v->_ui_context->connect(undef);
 is( errmsg{my @metrics= $v->_ui_context->screen_metrics }, '', 'got screen dims' );
 
-is( errmsg{ $v->_ui_context->setup_glcontext(0, 0) }, '', 'setup_glcontext' );
+is( errmsg{ $v->_ui_context->setup_glcontext(0, 1) }, '', 'setup_glcontext' );
 
 is( errmsg{ $v->_ui_context->setup_window(0, 0, 100, 100) }, '', 'setup_window' );
 my $rect= [ $v->_ui_context->window_rect ];
