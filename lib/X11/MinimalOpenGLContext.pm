@@ -20,20 +20,20 @@ our %_ConnectedInstances;
   use OpenGL;
   use X11::MinimalOpenGLContext;
   
-  my $v= X11::MinimalOpenGLContext->new();
-  $v->setup_window;    # Connect to X11, create GL context, and create X11 window
-  $v->project_frustum; # convenience for setting up standard GL_PROJECTION matrix
+  my $glc= X11::MinimalOpenGLContext->new();
+  $glc->setup_window;    # Connect to X11, create GL context, and create X11 window
+  $glc->project_frustum; # convenience for setting up standard GL_PROJECTION matrix
   
   while (1) {
     ...; # Perform your OpenGL rendering
-    $v->show();   # calls glXSwapBuffers, and logs glGetError()
+    $glc->show();   # calls glXSwapBuffers, and logs glGetError()
   }
   
   # Or be more specific about the setup process:
-  $v= X11::MinimalOpenGLContext->new();
-  $v->connect("foo:1.0");       // connect to a remote display
-  $v->setup_glcontext(0, 1234); // connect to a shared indirect rendering context
-  $v->setup_window();
+  $glc= X11::MinimalOpenGLContext->new();
+  $glc->connect("foo:1.0");       // connect to a remote display
+  $glc->setup_glcontext(0, 1234); // connect to a shared indirect rendering context
+  $glc->setup_window();
 
 =head1 DESCRIPTION
 
@@ -93,7 +93,7 @@ Default value for the depth of C<glFrustum>, when L</project_frustum> is called.
 
 =head2 on_error
 
-  $v->on_error(sub {
+  $glc->on_error(sub {
     my ($min_gl_context_obj, $x_error_info, $is_fatal)= @_;
     ...
   });
@@ -147,8 +147,8 @@ Standard Moo constructor.  No attributes are required.
 
 =head2 connect
 
-  $v->connect();  # defaults to $ENV{DISPLAY}, else ":0"
-  $v->connect( $display_string );
+  $glc->connect();  # defaults to $ENV{DISPLAY}, else ":0"
+  $glc->connect( $display_string );
 
 Connect to X server.  Dies if it can't connect.
 
@@ -198,7 +198,7 @@ sub _rect { X11::MinimalOpenGLContext::Rect->new(@_) }
 
 =head2 setup_glcontext
 
-  $v->setup_context($direct, $shared_X_id);
+  $glc->setup_context($direct, $shared_X_id);
 
 Create the OpenGL context.  This is done before creating the window, but you
 can't run OpenGL rendering commands until after the window is selected as the
@@ -243,8 +243,8 @@ sub glcontext_id {
 
 =head2 setup_window
 
-  $v->setup_window(); # defaults to $ENV{GEOMETRY}, else size of screen
-  $v->setup_window([ $x, $y, $w, $h ]); # or specify your own size
+  $glc->setup_window(); # defaults to $ENV{GEOMETRY}, else size of screen
+  $glc->setup_window([ $x, $y, $w, $h ]); # or specify your own size
 
 Create an X11 window and initialize an OpenGL context on it.
 
@@ -295,13 +295,20 @@ sub window_rect {
 =head2 screen_dims
 
   my ($width, $height, $physical_width_mm, $physical_height_mm)
-    = $v->screen_dims
+    = $glc->screen_dims
 
-Query X11 for the pixel dimensions and physical dimensions of the
-default screen.  This module does not yet support multi-display
-setups.
+Query X11 for the pixel dimensions and physical dimensions of the default
+screen.  This module does not yet support detailing the individual monitor
+coordinates in a multi-monitor screen.
 
-Throws an exception if called before L</connect>
+(and in case you haven't encountered X11's screen vs. monitor weirdness before,
+ the story is that as X11 was designed, a "display" can have multiple "screens",
+ but a window can only display to one screen without restarting the program,
+ and screens can't be added dynamically.  So they worked around the problem
+ with an extension that allows a screen to resize on the fly and be composed of
+ multiple monitors.)
+
+Throws an exception if called before L</connect>.
 
 =cut
 
@@ -312,7 +319,7 @@ sub screen_dims {
 
 =head2 screen_pixel_aspect_ratio
 
-  my $pixel_aspect= $v->screen_pixel_aspect_ratio();
+  my $pixel_aspect= $glc->screen_pixel_aspect_ratio();
 
 Returns the ratio of the physical width of one pixel by the physical height
 of one pixel.  If any of the measurements are missing it defaults to 1.0
@@ -330,11 +337,11 @@ sub screen_pixel_aspect_ratio {
 
 =head2 project_frustum
 
-  $v->viewport_rect( ... );  # default is size of window
-  $v->frustum_rect( ... );   # default is top=0.5, bottom=-0.5 with aspect-correct width
-  $v->project_frustum();
+  $glc->viewport_rect( ... );  # default is size of window
+  $glc->frustum_rect( ... );   # default is top=0.5, bottom=-0.5 with aspect-correct width
+  $glc->project_frustum();
   # -or-
-  $v->project_frustum( $viewport_rect, $frustum_rect );
+  $glc->project_frustum( $viewport_rect, $frustum_rect );
 
 This method sets up a sensible OpenGL projection matrix.
 It is not related to X11 and is just provided with this module for
@@ -393,7 +400,7 @@ sub project_frustum {
 
 =head2 swap_buffers
 
-  $v->swap_buffers()
+  $glc->swap_buffers()
 
 Pass-through to glXSwapBuffers();
 
@@ -407,8 +414,8 @@ sub swap_buffers {
 
 =head2 show
 
-Convenience method to call C<< $v->swap_buffers() >>
-and log the results of C<< $v->gl_get_errors() >> to Log::Any
+Convenience method to call C<< $glc->swap_buffers() >>
+and log the results of C<< $glc->gl_get_errors() >> to Log::Any
 
 Throws an exception if called before L</setup_window>
 
@@ -486,9 +493,9 @@ sub _X11_error_fatal {
 	$log->error("Fatal X11 error.");
 	my @close= values %_ConnectedInstances;
 	for my $v (@close) {
-		try { $v->on_error->($v, undef, 1) } catch { warn $_; }
-			if $v->on_error;
-		try { $v->disconnect; } catch { warn $_; };
+		try { $glc->on_error->($v, undef, 1) } catch { warn $_; }
+			if $glc->on_error;
+		try { $glc->disconnect; } catch { warn $_; };
 	}
 }
 
