@@ -21,14 +21,16 @@ like(errmsg{ $v->_ui_context->screen_metrics }, qr/connect/i, 'screen dims unava
 $v->_ui_context->connect(undef);
 is( errmsg{my @metrics= $v->_ui_context->screen_metrics }, '', 'got screen dims' );
 
-is( errmsg{ $v->_ui_context->setup_glcontext(0, 1) }, '', 'setup_glcontext' );
+is( errmsg{ $v->_ui_context->setup_glcontext(1, 0) }, '', 'setup_glcontext' );
 
-is( errmsg{ $v->_ui_context->setup_window(0, 0, 100, 100) }, '', 'setup_window' );
-my $rect= [ $v->_ui_context->window_rect ];
+my $wnd_xid;
+is( errmsg{ $wnd_xid= $v->_ui_context->create_window(0, 0, 100, 100) }, '', 'create_window' );
+my $rect= [ $v->_ui_context->window_rect($wnd_xid) ];
 ok( $rect->[2] > 0, 'can load window dimensions' );
 
 # Test lack of an exception
-is( errmsg { $v->_ui_context->flip; }, '', 'flip' );
+is( errmsg { $v->_ui_context->glXMakeCurrent($wnd_xid) }, '', 'XMakeCurrent' );
+is( errmsg { $v->_ui_context->glXSwapBuffers(); }, '', 'glXSwapBuffers' );
 
 is( errmsg{ $v->_ui_context->disconnect() }, '', 'disconnect' );
 done_testing;

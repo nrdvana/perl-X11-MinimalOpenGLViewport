@@ -5,6 +5,9 @@ use Try::Tiny;
 use Scalar::Util 'weaken';
 use Carp;
 require OpenGL;
+use X11::MinimalOpenGLContext::Rect;
+use X11::MinimalOpenGLContext::Window;
+use X11::MinimalOpenGLContext::Pixmap;
 
 our $VERSION= '0.00_00';
 
@@ -21,7 +24,9 @@ our %_ConnectedInstances;
   use X11::MinimalOpenGLContext;
   
   my $glc= X11::MinimalOpenGLContext->new();
-  $glc->setup_window;    # Connect to X11, create GL context, and create X11 window
+  my $wnd= $glc->create_window; # Connect to X11, create GL context, and create X11 window
+  $wnd->map_window;
+  $glc->set_gl_target
   $glc->project_frustum; # convenience for setting up standard GL_PROJECTION matrix
   
   while (1) {
@@ -33,7 +38,7 @@ our %_ConnectedInstances;
   $glc= X11::MinimalOpenGLContext->new();
   $glc->connect("foo:1.0");       // connect to a remote display
   $glc->setup_glcontext(0, 1234); // connect to a shared indirect rendering context
-  $glc->setup_window();
+  $glc->create_window();
 
 =head1 DESCRIPTION
 
@@ -65,19 +70,27 @@ defaults to true of not overridden by this or the argument to setup_glcontext.
 
 Default value for second argument of L</setup_glcontext>.
 
+=head2 pixmap_w
+
+Default width for L</setup_pixmap>
+
+=head2 pixmap_h
+
+Default height for L</setup_pixmap>
+
 =head2 mirror_x
 
 If set to true, this reverses the window coordinates of the GL viewport and
 the logical coordinates of the OpenGL projection.  Only takes effect if you
 call the L</project_frustum> method.
 
-This is automatically enabled if the window width given to L</setup_window> is negative.
+This is automatically enabled if the window width given to L</create_window> is negative.
 
 =head2 mirror_y
 
 Like mirror_x.
 
-This is automatically enabled if the window height given to L</setup_window> is negative.
+This is automatically enabled if the window height given to L</create_window> is negative.
 
 =head2 viewport_rect
 
@@ -121,12 +134,20 @@ Called any time you disconnect from the X server for any reason.
 has _ui_context       => ( is => 'lazy', predicate => 1 );
 sub _build__ui_context   { X11::MinimalOpenGLContext::UIContext->new; }
 
+# We hold a reference to whatever Drawable is targeted, so that the application
+# doesn't have to bother maintaining it.
+has _gl_target        => ( is => 'rw' );
+
 # used by connect
 has display           => ( is => 'rw' );
 
 # used by setup_glcontext
 has direct_render     => ( is => 'rw' );
 has shared_context_id => ( is => 'rw' );
+
+# used by setup_pixmap
+has pixmap_w          => ( is => 'rw' );
+has pixmap_h          => ( is => 'rw' );
 
 # Used by project_frustum
 has mirror_x       => ( is => 'rw' );
@@ -181,6 +202,7 @@ Graceful teardown of OpenGL context, window, and X11 connection
 
 sub disconnect {
 	my $self= shift;
+	$self->_gl_target(undef);
 	$self->_ui_context->disconnect;
 	delete $_ConnectedInstances{$self};
 	$self->on_disconnect->($self) if $self->on_disconnect;
@@ -220,11 +242,13 @@ C<GLX_EXT_import_context>, but should be found in all modern Linux distros.
 
 sub setup_glcontext {
 	my ($self, $direct, $shared_cx_id)= @_;
+	$self->connect unless $self->is_connected;
 	$direct= $self->direct_render unless defined $direct;
 	$direct= 1 unless defined $direct;
 	$shared_cx_id= $self->shared_context_id unless defined $shared_cx_id;
-	$self->_ui_context->setup_glcontext($shared_cx_id||0, $direct);
+	$self->_ui_context->setup_glcontext($direct, $shared_cx_id||0);
 	$log->debug("gl context is ".$self->glcontext_id);
+	return $self;
 }
 
 =head2 glcontext_id
@@ -241,25 +265,34 @@ sub glcontext_id {
 	return shift->_ui_context->glctx_id;
 }
 
-=head2 setup_window
+=head2 create_window
 
-  $glc->setup_window(); # defaults to $ENV{GEOMETRY}, else size of screen
-  $glc->setup_window([ $x, $y, $w, $h ]); # or specify your own size
+  $glc->create_window(); # defaults to $ENV{GEOMETRY}, else size of screen
+  $glc->create_window([ $x, $y, $w, $h ]); # or specify your own size
 
-Create an X11 window and initialize an OpenGL context on it.
+Create an X11 window.  You can then call L</set_gl_target> to make it the
+current target of OpenGL rendering.
 
 Automatically calls L</connect> if not connected to a display yet, and
-setup_glcontext(1) if the GL context isn't set up yet.
-If L</setup_window> has already been called this will destroy the current
-window and then create a new one.
+L</setup_glcontext> if the GL context isn't set up yet.
+
+=cut
+
+sub create_window {
+	my ($self, $rect)= @_;
+	return X11::MinimalOpenGLContext::Window->new($self, $rect);
+}
+
+=head2 setup_window
+
+Combination of L</create_window>, $wnd->map_window, and L</set_gl_target>, the
+last of which also holds onto the reference to the new window object so that
+you don't have to worry about it.
 
 =cut
 
 sub setup_window {
 	my ($self, $rect)= @_;
-	$self->connect unless $self->is_connected;
-	$self->setup_glcontext(1) unless $self->_ui_context->has_glcontext;
-	
 	my ($x, $y, $w, $h);
 	if (defined $rect) {
 		ref $rect or croak "Expected Rect object, arrayref, or hashref";
@@ -269,27 +302,47 @@ sub setup_window {
 	elsif ($ENV{GEOMETRY} && $ENV{GEOMETRY} =~ /^(\d+)x(\d+)(?:\+(\d+)\+(\d+))?$/) {
 		($x, $y, $w, $h)= ( $3, $4, $1, $2 );
 	}
-	
 	# If w or h is negative, set the appropriate mirror flag
 	if (defined $w && $w < 0) { $self->mirror_x(1); $w= -$w; }
 	if (defined $h && $h < 0) { $self->mirror_y(1); $h= -$h; }
-	
 	# If X or Y are undef, default to 0.  If w or h are undef, set them to 0
 	#  which will default to screen dims in the C code.
-	$self->_ui_context->setup_window($x||0, $y||0, $w||0, $h||0);
+	$rect= _rect($x||0, $y||0, $w||0, $h||0);
+	
+	$self->connect unless $self->is_connected;
+	$self->setup_glcontext unless $self->_ui_context->has_glcontext;
+	my $wnd= $self->create_window($rect);
+	$wnd->map_window(0);
+	$self->set_gl_target($wnd);
 }
 
-=head2 window_rect
+=head2 create_pixmap
 
-Returns the current rect of the window, live from the X server.
-
-Throws an exception if called before L</setup_window>
+Instead of a window, you can render to an offscreen pixmap, and then
+fetch the results to use for other purposes.  This method creates a
+pixmap which you can then pass to L</set_gl_target>.
 
 =cut
 
-sub window_rect {
-	my $self= shift;
-	return _rect($self->_ui_context->window_rect);
+sub create_pixmap {
+	my ($self, $w, $h)= @_;
+
+	$w ||= $self->pixmap_w;
+	$h ||= $self->pixmap_h;
+	$h ||= $w;
+	$w ||= $h;
+	defined $w or croak "Dimensions for pixmap are required";
+
+	return X11::MinimalOpenGLContext::Pixmap->new($self, $w, $h);
+}
+
+sub setup_pixmap {
+	my ($self, $w, $h)= @_;
+
+	$self->connect unless $self->is_connected;
+	$self->setup_glcontext unless $self->_ui_context->has_glcontext;
+	my $pxm= $self->create_pixmap($w, $h);
+	$self->set_gl_target($pxm);
 }
 
 =head2 screen_dims
@@ -335,6 +388,16 @@ sub screen_pixel_aspect_ratio {
 	return ($screen_w_mm * $screen_h) / ($screen_h_mm * $screen_w);
 }
 
+=head2 set_gl_target
+
+=cut
+
+sub set_gl_target {
+	my ($self, $drawable)= @_;
+	$self->_ui_context->glXMakeCurrent($drawable->xid);
+	$self->_gl_target($drawable);
+}
+
 =head2 project_frustum
 
   $glc->viewport_rect( ... );  # default is size of window
@@ -347,14 +410,14 @@ This method sets up a sensible OpenGL projection matrix.
 It is not related to X11 and is just provided with this module for
 your convenience.
 
-Throws an exception if called before L</setup_window>
+Throws an exception if called before L</create_window>
 
 =cut
 
 sub project_frustum {
 	my ($self, $viewport_rect, $frustum_rect)= @_;
 	my $pixel_aspect= $self->screen_pixel_aspect_ratio();
-	my $window_rect= $self->window_rect;
+	my $window_rect= $self->_gl_target->get_rect;
 	my $mirror_x= $self->mirror_x? 1 : 0;
 	my $mirror_y= $self->mirror_y? 1 : 0;
 	
@@ -396,6 +459,7 @@ sub project_frustum {
 	# If mirror is in effect, need to tell OpenGL which way the camera is
 	OpenGL::glFrontFace($mirror_x == $mirror_y? OpenGL::GL_CCW() : OpenGL::GL_CW());
 	OpenGL::glMatrixMode(OpenGL::GL_MODELVIEW());
+	return $self;
 }
 
 =head2 swap_buffers
@@ -404,20 +468,18 @@ sub project_frustum {
 
 Pass-through to glXSwapBuffers();
 
-Throws an exception if called before L</setup_window>
-
 =cut
 
 sub swap_buffers {
-	shift->_ui_context->flip();
+	my $self= shift;
+	$self->_ui_context->glXSwapBuffers();
+	return $self;
 }
 
 =head2 show
 
 Convenience method to call C<< $glc->swap_buffers() >>
 and log the results of C<< $glc->gl_get_errors() >> to Log::Any
-
-Throws an exception if called before L</setup_window>
 
 =cut
 
@@ -434,8 +496,6 @@ sub show {
 
 Convenience method to call glGetError repeatedly and build a
 hash of the symbolic names of the error constants.
-
-Throws an exception if called before L</setup_window>
 
 =cut
 
@@ -497,32 +557,6 @@ sub _X11_error_fatal {
 			if $glc->on_error;
 		try { $glc->disconnect; } catch { warn $_; };
 	}
-}
-
-package X11::MinimalOpenGLContext::Rect;
-use strict;
-use warnings;
-use Carp;
-
-sub new {
-	my $class= shift;
-	my $self= (@_ == 1 && ref $_[0])?
-		(ref($_[0]) eq 'HASH'? { %{$_[0]} }
-		: ref($_[0])->isa($class)? { %{$_[0]} }
-		: ref($_[0]) eq 'ARRAY'? { x => $_[0][0], y => $_[0][1], w => $_[0][2], h => $_[0][3] }
-		: croak "Expected arrayref or hashref or x,y,w,h in Rect constructor"
-		)
-		: { x => $_[0], y => $_[1], w => $_[2], h => $_[3] };
-	return bless $self, $class;
-}
-
-sub x { shift->{x} }
-sub y { shift->{y} }
-sub w { shift->{w} }
-sub h { shift->{h} }
-sub x_y_w_h {
-	my $self= shift;
-	@{$self}{qw/ x y w h /};
 }
 
 1;

@@ -2,6 +2,7 @@
 #include <GL/glx.h>
 #include <X11/Xlib.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 // The .xs includes this file, and provides definitions for the
 //  logging functions, and also perl's "croak".
@@ -20,6 +21,10 @@
  #define croak(x...) do { fprintf(stderr, "\nfatal: " x); exit(2); } while (0)
 #endif
 
+#if None != 0
+ #error Code makes invalid assumtion about XID "None"!
+#endif
+
 typedef struct UIContext {
 	Display     *dpy;
 	
@@ -34,10 +39,8 @@ typedef struct UIContext {
 	GLXContextID glctx_id; // The X11 ID of the GL context, sharable between processes
 	int          glctx_is_imported;
 	
-	// X Window or X Pixmap rendering target, initialized by setup_window or setup_pixmap
-	int          target_ready;
-	Colormap     cmap;
-	Window       wnd;
+	// X Window or X Pixmap rendering target, initialized by set_gl_target
+	Window       target;
 } UIContext;
 
 static int UIContext_X_handler_installed= 0;
@@ -45,23 +48,22 @@ static int UIContext_X_Fatal= 0; // global flag to prevent running more X calls 
 #define CROAK_IF_XLIB_FATAL()     do { if (UIContext_X_Fatal) croak("Cannot call XLib functions after a fatal error"); } while(0)
 #define CROAK_IF_NO_DISPLAY(cx)   do { if (!cx->dpy) croak("Not connected to a display"); } while (0)
 #define CROAK_IF_NO_GLCONTEXT(cx) do { if (!cx->glctx) croak("No GL Context"); } while (0)
-#define CROAK_IF_NO_WINDOW(cx)    do { if (!cx->wnd) croak("Window not created yet"); } while (0)
-#define CROAK_IF_NO_TARGET(cx)    do { if (!cx->target_ready) croak("OpenGL context has no target"); } while (0)
+#define CROAK_IF_NO_TARGET(cx)    do { if (!cx->target) croak("OpenGL context has no target"); } while (0)
 
 int UIContext_X_IO_error_handler(Display *d);
 int UIContext_X_error_handler(Display *d, XErrorEvent *e);
 
 UIContext *UIContext_new();
-void UIContext_connect(UIContext *cx, const char* dispName);
-void UIContext_setup_glcontext(UIContext *cx, GLXContextID link_to, int direct);
-void UIContext_setup_window(UIContext *cx, int win_x, int win_y, int win_w, int win_h);
-void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm);
-void UIContext_get_window_rect(UIContext *cx, int *x, int *y, unsigned int *width, unsigned int *height);
-void UIContext_flip(UIContext *cx);
-void UIContext_teardown_target(UIContext *cx);
-void UIContext_teardown_glcontext(UIContext *cx);
-void UIContext_disconnect(UIContext *cx);
 void UIContext_free(UIContext *cx);
+void UIContext_connect(UIContext *cx, const char* dispName);
+void UIContext_disconnect(UIContext *cx);
+void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm);
+
+void UIContext_setup_glcontext(UIContext *cx, int direct, GLXContextID link_to);
+void UIContext_teardown_glcontext(UIContext *cx);
+
+void UIContext_get_window_rect(UIContext *cx, Window wnd, int *x, int *y, unsigned int *width, unsigned int *height);
+void UIContext_glXSwapBuffers(UIContext *cx);
 
 typedef GLXContext ( * PFNGLXIMPORTCONTEXTEXTPROC) (Display* dpy, GLXContextID contextID);
 typedef GLXContextID ( * PFNGLXGETCONTEXTIDEXTPROC) (const GLXContext context);
@@ -144,9 +146,46 @@ void UIContext_disconnect(UIContext *cx) {
 	}
 }
 
-void UIContext_setup_glcontext(UIContext *cx, GLXContextID link_to, int direct) {
+int UIContext_get_xlib_socket(UIContext *cx) {
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+	
+	return ConnectionNumber(cx->dpy);
+}
+
+int UIContext_wait_xlib_socket(UIContext *cx, struct timeval tv) {
+	fd_set fds;
+	int ready, x11_fd;
+
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+
+	x11_fd= ConnectionNumber(cx->dpy);
+	FD_ZERO(&fds);
+	FD_SET(x11_fd, &fds);
+	return select(x11_fd+1, &fds, NULL, &fds, &tv);
+}
+
+void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm) {
+	Screen *s;
+
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+
+	if (!(s= DefaultScreenOfDisplay(cx->dpy)))
+		croak("DefaultScreenOfDisplay failed");
+
+	if (w) *w= WidthOfScreen(s);
+	if (h) *h= HeightOfScreen(s);
+	if (w_mm) *w_mm= WidthMMOfScreen(s);
+	if (h_mm) *h_mm= HeightMMOfScreen(s);
+}
+
+void UIContext_setup_glcontext(UIContext *cx, int direct, GLXContextID link_to) {
 	PFNGLXIMPORTCONTEXTEXTPROC import_context_fn;
 	PFNGLXGETCONTEXTIDEXTPROC  get_context_id_fn;
+	PFNGLXQUERYCONTEXTINFOEXTPROC query_context_info_fn;
+	int visual_id;
 	
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
@@ -172,7 +211,8 @@ void UIContext_setup_glcontext(UIContext *cx, GLXContextID link_to, int direct) 
 	int support_import_context= cx->glx_extensions
 		&& strstr(cx->glx_extensions, "GLX_EXT_import_context")
 		&& (import_context_fn= (PFNGLXIMPORTCONTEXTEXTPROC) glXGetProcAddress("glXImportContextEXT"))
-		&& (get_context_id_fn= (PFNGLXGETCONTEXTIDEXTPROC)  glXGetProcAddress("glXGetContextIDEXT"));
+		&& (get_context_id_fn= (PFNGLXGETCONTEXTIDEXTPROC)  glXGetProcAddress("glXGetContextIDEXT"))
+		&& (query_context_info_fn= (PFNGLXQUERYCONTEXTINFOEXTPROC) glXGetProcAddress("glXQueryContextInfoEXT"));
 
 	if (link_to) {
 		if (!support_import_context)
@@ -184,6 +224,14 @@ void UIContext_setup_glcontext(UIContext *cx, GLXContextID link_to, int direct) 
 		cx->glctx= import_context_fn(cx->dpy, link_to);
 		if (!cx->glctx)
 			croak("Can't import remote GL context %d", link_to);
+		
+		// Get the visual ID used by the existing context
+		if (Success != query_context_info_fn(cx->dpy, cx->glctx, GLX_VISUAL_ID_EXT, &visual_id))
+			croak("Can't retrieve visual ID of existing GL context");
+		// Was going to look up the VisualInfo for this ID, but don't see a way to do that.
+		// Instead, just make sure it is the same one as we created above.
+		if (visual_id != cx->xvisi->visualid)
+			croak("Visual of shared GL context does not match the one returned by glXChooseVisual");
 	}
 	else {
 		if (en_trace)
@@ -199,7 +247,10 @@ void UIContext_setup_glcontext(UIContext *cx, GLXContextID link_to, int direct) 
 void UIContext_teardown_glcontext(UIContext *cx) {
 	PFNGLXFREECONTEXTEXTPROC free_context_fn;
 	
-	UIContext_teardown_target(cx);
+	if (cx->target) {
+		glXMakeCurrent(cx->dpy, None, NULL);
+		cx->target= None;
+	}
 	
 	if (!UIContext_X_Fatal && cx->glctx) {
 		if (cx->glctx_is_imported) {
@@ -218,136 +269,218 @@ void UIContext_teardown_glcontext(UIContext *cx) {
 	cx->xvisi= NULL;
 }
 
-static Bool WaitForWndMapped( Display *dpy, XEvent *event, XPointer arg ) {
-    return (event->type == MapNotify) && (event->xmap.window == (Window) arg);
+
+Bool UIContext_wait_event(
+	UIContext *cx,
+	XEvent *event,
+	Bool (*callback)(Display*, XEvent*, XPointer),
+	XPointer callback_arg,
+	int max_wait_msec
+) {
+	struct timespec start_time, now;
+	start_time.tv_sec= 0;
+	start_time.tv_nsec= 0;
+	struct timeval tv;
+
+	while (!XCheckIfEvent(cx->dpy, event, callback, callback_arg)) {
+		if (0 != clock_gettime(CLOCK_MONOTONIC, &now))
+			croak("clock_gettime(CLOCK_MONOTONIC) failed");
+		if (!start_time.tv_sec && !start_time.tv_nsec) {
+			start_time.tv_sec=  now.tv_sec;
+			start_time.tv_nsec= now.tv_nsec;
+		}
+		tv.tv_sec  =  (max_wait_msec / 1000)  - (now.tv_sec  - start_time.tv_sec);
+		tv.tv_usec = ((max_wait_msec % 1000)*1000000 - (now.tv_nsec - start_time.tv_nsec));
+		if (tv.tv_usec < 0) { tv.tv_usec += 1000000000; tv.tv_sec--; }
+		if (tv.tv_sec  < 0) return 0;  // timeout
+		
+		if (UIContext_wait_xlib_socket(cx, tv) <= 0)
+			return 0; // timeout, interrupted by signal, or other error
+	}
+	return 1;
 }
-void UIContext_setup_window(UIContext *cx, int win_x, int win_y, int win_w, int win_h) {
-	XColor black;
-	static char noData[] = { 0,0,0,0,0,0,0,0 };
-	int w, h, en_debug, en_trace;
-	XSetWindowAttributes wndAttrs;
-	Pixmap bitmapNoData;
-	Cursor invisibleCursor;
-	XEvent event;
-	XSizeHints sh;
+
+void UIContext_glXMakeCurrent(UIContext *cx, int xid) {
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+	CROAK_IF_NO_GLCONTEXT(cx);
+
+	if (!glXMakeCurrent(cx->dpy, xid, cx->glctx))
+		croak("glXMakeCurrent failed");
+	cx->target= xid;
+}
+
+int UIContext_create_pixmap(UIContext *cx, int w, int h) {
+	int xid;
 
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
 	CROAK_IF_NO_GLCONTEXT(cx);
 
-	UIContext_teardown_target(cx);
+	xid= XCreatePixmap(cx->dpy, DefaultRootWindow(cx->dpy),
+		w, h, cx->xvisi->depth);
+	if (!xid)
+		croak("XCreatePixmap failed");
+	return xid;
+}
+
+void UIContext_destroy_pixmap(UIContext *cx, Pixmap xid) {
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+
+	XFreePixmap(cx->dpy, xid);
+}
+
+Window UIContext_create_window(UIContext *cx, int x, int y, int w, int h) {
+	int en_debug, en_trace;
+	Window wnd;
+	XSetWindowAttributes wndAttrs;
+	Colormap cmap;
+	Screen *s;
+
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
 
 	en_debug= log_debug_enabled();
 	en_trace= log_trace_enabled();
 
 	if (en_trace)
 		log_trace("calling XCreateColormap");
-	cx->cmap= XCreateColormap(cx->dpy, DefaultRootWindow(cx->dpy), cx->xvisi->visual, AllocNone);
-	if (!cx->cmap)
+	cmap= XCreateColormap(cx->dpy, DefaultRootWindow(cx->dpy), cx->xvisi->visual, AllocNone);
+	if (!cmap)
 		croak("XCreateColormap failed");
-	
+
 	memset(&wndAttrs, 0, sizeof(wndAttrs));
 	wndAttrs.background_pixel= 0;
 	wndAttrs.border_pixel= 0;
-	wndAttrs.colormap= cx->cmap;
-	
-	UIContext_get_screen_metrics(cx, &w, &h, NULL, NULL);
+	wndAttrs.colormap= cmap;
+
 	if (en_debug)
 		log_debug("X11 screen is %dx%d", w, h);
 
-	if (win_w <= 0) win_w= w;
-	if (win_h <= 0) win_h= h;
-	if (en_trace)
-		log_trace("calling XCreateWindow( {%d,%d,%d,%d} )", win_x, win_y, win_w, win_h);
+	// Default missing window dimensions to screen size
+	if (w <= 0 || h <= 0) {
+		if (!(s= DefaultScreenOfDisplay(cx->dpy))) {
+			XFreeColormap(cx->dpy, cmap);
+			croak("DefaultScreenOfDisplay failed");
+		}
+		
+		if (w <= 0) w= WidthOfScreen(s);
+		if (h <= 0) h= HeightOfScreen(s);
+	}
 	
-	cx->wnd= XCreateWindow(cx->dpy, DefaultRootWindow(cx->dpy),
-		win_x, win_y, win_w, win_h, 0, cx->xvisi->depth,
+	if (en_trace)
+		log_trace("calling XCreateWindow( {%d,%d,%d,%d} )", x, y, w, h);
+	wnd= XCreateWindow(cx->dpy, DefaultRootWindow(cx->dpy),
+		x, y, w, h, 0, cx->xvisi->depth,
 		InputOutput, cx->xvisi->visual,
 		CWBackPixel|CWBorderPixel|CWColormap, &wndAttrs);
-	if (!cx->wnd)
+	XFreeColormap(cx->dpy, cmap);
+	if (!wnd)
 		croak("XCreateWindow failed");
-
-	if (en_trace)
-		log_trace("setting invisible cursor");
-	black.red = black.green = black.blue = 0;
-	bitmapNoData= XCreateBitmapFromData(cx->dpy, cx->wnd, noData, 8, 8);
-	if (!bitmapNoData)
-		croak("XCreateBitmapFromData failed");
-	invisibleCursor= XCreatePixmapCursor(cx->dpy, bitmapNoData, bitmapNoData, &black, &black, 0, 0);
-	if (!invisibleCursor)
-		croak("XCreatePixmapCursor failed");
-	XDefineCursor(cx->dpy, cx->wnd, invisibleCursor);
-	XFreeCursor(cx->dpy, invisibleCursor);
-
-	sh.width = sh.min_width = win_w;
-	sh.height = sh.min_height = win_h;
-	sh.x = 0;
-	sh.y = 0;
-	sh.flags = PSize | PMinSize | PPosition;
-	if (en_trace)
-		log_trace("calling XSetWMNormalHints");
-	XSetWMNormalHints(cx->dpy, cx->wnd, &sh);
-
-	if (en_trace)
-		log_trace("calling XMapWindow");
-	XMapWindow(cx->dpy, cx->wnd);
-	//XIfEvent(cx->dpy, &event, WaitForWndMapped, (XPointer) cx->wnd);
-
-	if (en_trace)
-		log_trace("calling glXMakeCurrent");
-	if (!glXMakeCurrent(cx->dpy, cx->wnd, cx->glctx))
-		croak("glXMakeCurrent failed");
-
-	if (en_trace)
-		log_trace("setup_window succeeded");
-
-	log_info("OpenGL vendor: %s, renderer: %s, version: %s",
-		glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
-
-	cx->target_ready= 1;
+	
+	return wnd;
 }
 
-void UIContext_teardown_target(UIContext *cx) {
-	if (!UIContext_X_Fatal && cx->wnd)   XDestroyWindow(cx->dpy, cx->wnd);
-	cx->wnd= 0;
-	if (!UIContext_X_Fatal && cx->cmap)  XFreeColormap(cx->dpy, cx->cmap);
-	cx->cmap= 0;
-	cx->target_ready= 0;
+void UIContext_destroy_window(UIContext *cx, Window xid) {
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+
+	XDestroyWindow(cx->dpy, xid);
 }
 
 void UIContext_get_window_rect(
-	UIContext *cx,
+	UIContext *cx, Window wnd,
 	int *x, int *y,	unsigned int *width, unsigned int *height
 ) {
-	CROAK_IF_XLIB_FATAL();
-	CROAK_IF_NO_DISPLAY(cx);
-	CROAK_IF_NO_WINDOW(cx);
 	Window root;
 	unsigned int border= 0, depth= 0;
-	XGetGeometry(cx->dpy, cx->wnd, &root, x, y, width, height, &border, &depth);
-}
 
-void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int *h_mm) {
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
-	
-	Screen *s= DefaultScreenOfDisplay(cx->dpy);
-	if (!s)
-		croak("DefaultScreenOfDisplay failed");
-	
-	if (w) *w= WidthOfScreen(s);
-	if (h) *h= HeightOfScreen(s);
-	if (w_mm) *w_mm= WidthMMOfScreen(s);
-	if (h_mm) *h_mm= HeightMMOfScreen(s);
+
+	XGetGeometry(cx->dpy, wnd, &root, x, y, width, height, &border, &depth);
 }
 
-void UIContext_flip(UIContext *cx) {
+void UIContext_window_set_blank_cursor(UIContext *cx, Window wnd) {
+	XColor black;
+	static char noData[] = { 0,0,0,0,0,0,0,0 };
+	Pixmap bitmapNoData;
+	Cursor invisibleCursor;
+
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+
+	black.red = black.green = black.blue = 0;
+	bitmapNoData= XCreateBitmapFromData(cx->dpy, wnd, noData, 8, 8);
+	if (!bitmapNoData)
+		croak("XCreateBitmapFromData failed");
+	invisibleCursor= XCreatePixmapCursor(cx->dpy, bitmapNoData, bitmapNoData, &black, &black, 0, 0);
+	XFreePixmap(cx->dpy, bitmapNoData);
+	if (!invisibleCursor)
+		croak("XCreatePixmapCursor failed");
+	XDefineCursor(cx->dpy, wnd, invisibleCursor);
+	XFreeCursor(cx->dpy, invisibleCursor);
+}
+
+void UIContext_XSetWMNormalHints(UIContext *cx, Window wnd, HV* hints) {
+	XSizeHints *sh;
+	SV** pval;
+	
+	sh= XAllocSizeHints();
+	if (!sh) croak("XAllocSizeHints failed");
+	#define LOADFIELD(field, bitflag) if (\
+		(pval= hv_fetch(hints, #field, strlen(#field), 0)) && SvOK(*pval) \
+		) { sh->flags |= bitflag; sh->field = SvIV(*pval); }
+	LOADFIELD(x,            PPosition);
+	LOADFIELD(y,            PPosition);
+	LOADFIELD(width,        PSize);
+	LOADFIELD(height,       PSize);
+	LOADFIELD(min_width,    PMinSize);
+	LOADFIELD(min_height,   PMinSize);
+	LOADFIELD(max_width,    PMaxSize);
+	LOADFIELD(max_height,   PMaxSize);
+	LOADFIELD(width_inc,    PResizeInc);
+	LOADFIELD(height_inc,   PResizeInc);
+	LOADFIELD(min_aspect.x, PAspect);
+	LOADFIELD(min_aspect.y, PAspect);
+	LOADFIELD(max_aspect.x, PAspect);
+	LOADFIELD(max_aspect.y, PAspect);
+	LOADFIELD(base_width,   PBaseSize);
+	LOADFIELD(base_height,  PBaseSize);
+	LOADFIELD(win_gravity,  PWinGravity);
+	#undef LOADFIELD
+	XSetWMNormalHints(cx->dpy, wnd, sh);
+	// any error is asynchronous
+	XFree(sh);
+}
+
+static Bool WaitForWndMapped( Display *dpy, XEvent *event, XPointer arg ) {
+	log_info("XEvent: %d %d (waiting for %d %d)",
+		event->type, (int) event->xmap.window,
+		MapNotify, (int)(Window) arg);
+    return (event->type == MapNotify) && (event->xmap.window == (Window) arg);
+}
+void UIContext_XMapWindow(UIContext *cx, Window wnd, int wait_msec) {
+	XEvent event;
+	
+	CROAK_IF_XLIB_FATAL();
+	CROAK_IF_NO_DISPLAY(cx);
+	CROAK_IF_NO_GLCONTEXT(cx);
+	
+	XMapWindow(cx->dpy, wnd);
+	if (wait_msec) {
+		if (!UIContext_wait_event(cx, &event, WaitForWndMapped, (XPointer) wnd, wait_msec))
+			croak("Did not receive X11 MapNotify event");
+	}
+}
+
+void UIContext_glXSwapBuffers(UIContext *cx) {
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
 	CROAK_IF_NO_TARGET(cx);
 
-	glXSwapBuffers(cx->dpy, cx->wnd);
-	glFlush();
+	glXSwapBuffers(cx->dpy, cx->target);
 }
 
 void UIContext_get_xlib_error_codes(HV* dest) {

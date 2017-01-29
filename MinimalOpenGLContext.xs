@@ -94,19 +94,6 @@ screen_metrics(cx)
 		XPUSHs(sv_2mortal(newSViv(h_mm)));
 
 void
-window_rect(cx)
-	UIContext * cx;
-	INIT:
-		int x, y;
-		unsigned w, h;
-	PPCODE:
-		UIContext_get_window_rect(cx, &x, &y, &w, &h);
-		XPUSHs(sv_2mortal(newSViv(x)));
-		XPUSHs(sv_2mortal(newSViv(y)));
-		XPUSHs(sv_2mortal(newSViv(w)));
-		XPUSHs(sv_2mortal(newSViv(h)));
-
-void
 connect(cx, display)
 	UIContext * cx
 	const char * display 
@@ -119,6 +106,20 @@ disconnect(cx)
 	CODE:
 		UIContext_disconnect(cx);
 
+int
+get_xlib_socket(cx)
+	UIContext * cx
+	CODE:
+		RETVAL= UIContext_get_xlib_socket(cx);
+	OUTPUT:
+		RETVAL
+
+void
+XFlush(cx)
+	UIContext * cx
+	CODE:
+		XFlush(cx->dpy);
+
 void
 setup_glcontext(cx, link_to, direct)
 	UIContext * cx
@@ -128,20 +129,96 @@ setup_glcontext(cx, link_to, direct)
 		UIContext_setup_glcontext(cx, link_to, direct);
 
 void
-setup_window(cx, x, y, w, h)
+teardown_glcontext(cx)
+	UIContext * cx
+	CODE:
+		UIContext_teardown_glcontext(cx);
+
+int
+create_pixmap(cx, w, h)
+	UIContext * cx
+	int w
+	int h
+	CODE:
+		RETVAL= UIContext_create_pixmap(cx, w, h);
+	OUTPUT:
+		RETVAL
+
+void
+destroy_pixmap(cx, xid)
+	UIContext * cx
+	int xid
+	CODE:
+		UIContext_destroy_pixmap(cx, xid);
+
+int
+create_window(cx, x, y, w, h)
 	UIContext * cx
 	int x
 	int y
 	int w
 	int h
 	CODE:
-		UIContext_setup_window(cx, x, y, w, h);
+		RETVAL= UIContext_create_window(cx, x, y, w, h);
+	OUTPUT:
+		RETVAL
 
 void
-flip(cx)
+destroy_window(cx, xid)
+	UIContext * cx
+	int xid
+	CODE:
+		UIContext_destroy_window(cx, xid);
+
+void
+window_rect(cx, wnd)
+	UIContext * cx
+	int wnd
+	INIT:
+		int x, y;
+		unsigned w, h;
+	PPCODE:
+		UIContext_get_window_rect(cx, wnd, &x, &y, &w, &h);
+		XPUSHs(sv_2mortal(newSViv(x)));
+		XPUSHs(sv_2mortal(newSViv(y)));
+		XPUSHs(sv_2mortal(newSViv(w)));
+		XPUSHs(sv_2mortal(newSViv(h)));
+
+void
+window_set_blank_cursor(cx, wnd)
+	UIContext * cx
+	int wnd
+	CODE:
+		UIContext_window_set_blank_cursor(cx, wnd);
+
+void
+XSetWMNormalHints(cx, wnd, hints)
+	UIContext * cx
+	int wnd
+	HV* hints
+	CODE:
+		UIContext_XSetWMNormalHints(cx, wnd, hints);
+
+void
+XMapWindow(cx, wnd, wait_msec)
+	UIContext * cx
+	int wnd
+	int wait_msec
+	CODE:
+		UIContext_XMapWindow(cx, wnd, wait_msec);
+
+void
+glXMakeCurrent(cx, xid)
+	UIContext * cx
+	int xid
+	CODE:
+		UIContext_glXMakeCurrent(cx, xid);
+
+void
+glXSwapBuffers(cx)
 	UIContext * cx
 	CODE:
-		UIContext_flip(cx);
+		UIContext_glXSwapBuffers(cx);
 
 SV*
 display(cx)
@@ -162,10 +239,10 @@ has_glcontext(cx)
 		XPUSHs(sv_2mortal(newSViv(cx->glctx? 1 : 0)));
 
 SV*
-window_id(cx)
+current_gl_target(cx)
 	UIContext * cx
 	PPCODE:
-		XPUSHs(sv_2mortal(newSViv(cx->wnd)));
+		XPUSHs(sv_2mortal(newSViv(cx->target)));
 
 void
 glx_version(cx)
