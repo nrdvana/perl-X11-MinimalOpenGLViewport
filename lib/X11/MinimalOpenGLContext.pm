@@ -276,13 +276,6 @@ current target of OpenGL rendering.
 Automatically calls L</connect> if not connected to a display yet, and
 L</setup_glcontext> if the GL context isn't set up yet.
 
-=cut
-
-sub create_window {
-	my ($self, $rect)= @_;
-	return X11::MinimalOpenGLContext::Window->new($self, $rect);
-}
-
 =head2 setup_window
 
 Combination of L</create_window>, $wnd->map_window, and L</set_gl_target>, the
@@ -290,6 +283,11 @@ last of which also holds onto the reference to the new window object so that
 you don't have to worry about it.
 
 =cut
+
+sub create_window {
+	my ($self, $rect)= @_;
+	return X11::MinimalOpenGLContext::Window->new($self, $rect);
+}
 
 sub setup_window {
 	my ($self, $rect)= @_;
@@ -322,6 +320,11 @@ Instead of a window, you can render to an offscreen pixmap, and then
 fetch the results to use for other purposes.  This method creates a
 pixmap which you can then pass to L</set_gl_target>.
 
+=head2 setup_pixmap
+
+Convenience method for C<connect>, C<setup_glcontext>, C<create_pixmap>,
+and C<set_gl_target>.  Returns C<$self> for method chaining.
+
 =cut
 
 sub create_pixmap {
@@ -343,6 +346,7 @@ sub setup_pixmap {
 	$self->setup_glcontext unless $self->_ui_context->has_glcontext;
 	my $pxm= $self->create_pixmap($w, $h);
 	$self->set_gl_target($pxm);
+	return $self;
 }
 
 =head2 screen_dims

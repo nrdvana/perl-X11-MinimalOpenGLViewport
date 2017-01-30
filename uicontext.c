@@ -182,10 +182,12 @@ void UIContext_get_screen_metrics(UIContext *cx, int *w, int *h, int *w_mm, int 
 }
 
 void UIContext_setup_glcontext(UIContext *cx, int direct, GLXContextID link_to) {
-	PFNGLXIMPORTCONTEXTEXTPROC import_context_fn;
-	PFNGLXGETCONTEXTIDEXTPROC  get_context_id_fn;
+	PFNGLXIMPORTCONTEXTEXTPROC    import_context_fn;
+	PFNGLXGETCONTEXTIDEXTPROC     get_context_id_fn;
 	PFNGLXQUERYCONTEXTINFOEXTPROC query_context_info_fn;
+	PFNGLXFREECONTEXTEXTPROC      free_context_fn;
 	int visual_id;
+	GLXContext remote_context;
 	
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
@@ -208,40 +210,43 @@ void UIContext_setup_glcontext(UIContext *cx, int direct, GLXContextID link_to) 
 		log_debug("Selected Visual 0x%.2X", (int) cx->xvisi->visualid);
 
 	// Either create a new context, or connect to an indirect one
-	int support_import_context= cx->glx_extensions
-		&& strstr(cx->glx_extensions, "GLX_EXT_import_context")
-		&& (import_context_fn= (PFNGLXIMPORTCONTEXTEXTPROC) glXGetProcAddress("glXImportContextEXT"))
-		&& (get_context_id_fn= (PFNGLXGETCONTEXTIDEXTPROC)  glXGetProcAddress("glXGetContextIDEXT"))
-		&& (query_context_info_fn= (PFNGLXQUERYCONTEXTINFOEXTPROC) glXGetProcAddress("glXQueryContextInfoEXT"));
-
 	if (link_to) {
-		if (!support_import_context)
+		import_context_fn= (PFNGLXIMPORTCONTEXTEXTPROC) glXGetProcAddress("glXImportContextEXT");
+		free_context_fn=   (PFNGLXFREECONTEXTEXTPROC)   glXGetProcAddress("glXFreeContextEXT");
+		//query_context_info_fn= (PFNGLXQUERYCONTEXTINFOEXTPROC) glXGetProcAddress("glXQueryContextInfoEXT");
+		if (!import_context_fn || !free_context_fn)
 			croak("Can't connect to shared GL context; extension not supported by this X server.");
 
-		cx->glctx_is_imported= 1;
 		if (en_trace)
 			log_trace("calling glXImportContextEXT");
-		cx->glctx= import_context_fn(cx->dpy, link_to);
-		if (!cx->glctx)
+		remote_context= import_context_fn(cx->dpy, link_to);
+		if (!remote_context)
 			croak("Can't import remote GL context %d", link_to);
 		
 		// Get the visual ID used by the existing context
-		if (Success != query_context_info_fn(cx->dpy, cx->glctx, GLX_VISUAL_ID_EXT, &visual_id))
-			croak("Can't retrieve visual ID of existing GL context");
-		// Was going to look up the VisualInfo for this ID, but don't see a way to do that.
-		// Instead, just make sure it is the same one as we created above.
-		if (visual_id != cx->xvisi->visualid)
-			croak("Visual of shared GL context does not match the one returned by glXChooseVisual");
+		//if (Success != query_context_info_fn(cx->dpy, cx->glctx, GLX_VISUAL_ID_EXT, &visual_id)) {
+		//	free_context_fn(remote_context);
+		//	croak("Can't retrieve visual ID of existing GL context");
+		//}
+		//// Was going to look up the VisualInfo for this ID, but don't see a way to do that.
+		//// Instead, just make sure it is the same one as we created above.
+		//if (visual_id != cx->xvisi->visualid) {
+		//	free_context_fn(remote_context);
+		//	croak("Visual of shared GL context does not match the one returned by glXChooseVisual");
+		//}
+		cx->glctx= glXCreateContext(cx->dpy, cx->xvisi, remote_context, direct);
+		free_context_fn(cx->dpy, remote_context);
 	}
 	else {
 		if (en_trace)
 			log_trace("calling glXCreateContext");
 		cx->glctx= glXCreateContext(cx->dpy, cx->xvisi, NULL, direct);
-		if (!cx->glctx)
-			croak("glXCreateContext failed");
 	}
+	if (!cx->glctx)
+		croak("glXCreateContext failed");
 
-	cx->glctx_id= support_import_context? get_context_id_fn(cx->glctx) : 0;
+	get_context_id_fn= (PFNGLXGETCONTEXTIDEXTPROC) glXGetProcAddress("glXGetContextIDEXT");
+	cx->glctx_id= get_context_id_fn? get_context_id_fn(cx->glctx) : 0;
 }
 
 void UIContext_teardown_glcontext(UIContext *cx) {
@@ -311,7 +316,7 @@ void UIContext_glXMakeCurrent(UIContext *cx, int xid) {
 }
 
 int UIContext_create_pixmap(UIContext *cx, int w, int h) {
-	int xid;
+	int xid, gl_xid;
 
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
@@ -321,14 +326,19 @@ int UIContext_create_pixmap(UIContext *cx, int w, int h) {
 		w, h, cx->xvisi->depth);
 	if (!xid)
 		croak("XCreatePixmap failed");
-	return xid;
+	gl_xid= glXCreateGLXPixmap(cx->dpy, cx->xvisi, xid);
+	XFreePixmap(cx->dpy, xid); // gl pixmap should hold its own reference?
+	if (!gl_xid)
+		croak("glXCreateGLXPixmap failed");
+	
+	return gl_xid;
 }
 
 void UIContext_destroy_pixmap(UIContext *cx, Pixmap xid) {
 	CROAK_IF_XLIB_FATAL();
 	CROAK_IF_NO_DISPLAY(cx);
 
-	XFreePixmap(cx->dpy, xid);
+	glXDestroyGLXPixmap(cx->dpy, xid);
 }
 
 Window UIContext_create_window(UIContext *cx, int x, int y, int w, int h) {
@@ -354,6 +364,7 @@ Window UIContext_create_window(UIContext *cx, int x, int y, int w, int h) {
 	wndAttrs.background_pixel= 0;
 	wndAttrs.border_pixel= 0;
 	wndAttrs.colormap= cmap;
+	wndAttrs.event_mask= ExposureMask; // | KeyPressMask;
 
 	if (en_debug)
 		log_debug("X11 screen is %dx%d", w, h);

@@ -14,6 +14,14 @@ The instance of X11::MinimalOpenGLContext that created this window
 
 The X11 Window ID
 
+=head2 w
+
+The width of the pixmap
+
+=head2 h
+
+The height of the pixmap
+
 =cut
 
 sub ctx { $_[0][0] }
